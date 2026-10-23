@@ -1,42 +1,70 @@
 
 import random
+import re
 import time
 from collections import defaultdict, deque
+from datetime import timedelta
 
-import aiohttp
 import discord
 from redbot.core import commands, app_commands
 
 
 class BasicTools(commands.Cog):
-    """LawlietBot utilities, fun commands, and basic moderation."""
+    """LawlietBot utility, moderation, welcome, anti-spam and fun commands."""
 
     def __init__(self, bot):
         self.bot = bot
         self.message_times = defaultdict(deque)
-        self.last_spam_warning = {}
+        self.last_auto_reply = defaultdict(float)
 
-    # ---------- SERVER INFORMATION ----------
+    # ---------- Permission checks ----------
 
-    @app_commands.command(
-        name="serverinfo",
-        description="Show information about this server."
-    )
-    @app_commands.guild_only()
+    async def moderator_check(self, interaction, permission):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.",
+                ephemeral=True,
+            )
+            return False
+
+        if not getattr(interaction.user.guild_permissions, permission, False):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.",
+                ephemeral=True,
+            )
+            return False
+
+        return True
+
+    # ---------- Basic slash commands ----------
+
+    @app_commands.command(name="serverinfo", description="Show server information")
     async def serverinfo(self, interaction: discord.Interaction):
         guild = interaction.guild
+
+        if guild is None:
+            await interaction.response.send_message(
+                "Use this command in a server.",
+                ephemeral=True,
+            )
+            return
 
         embed = discord.Embed(
             title=guild.name,
             color=discord.Color.blurple(),
         )
+        embed.add_field(name="Server ID", value=str(guild.id), inline=False)
         embed.add_field(
             name="Members",
-            value=guild.member_count or "Unknown"
+            value=str(guild.member_count or "Unknown"),
         )
         embed.add_field(
             name="Text channels",
-            value=len(guild.text_channels)
+            value=str(len(guild.text_channels)),
+        )
+        embed.add_field(
+            name="Voice channels",
+            value=str(len(guild.voice_channels)),
         )
         embed.add_field(
             name="Created",
@@ -49,14 +77,8 @@ class BasicTools(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    # ---------- USER INFORMATION ----------
-
-    @app_commands.command(
-        name="userinfo",
-        description="Show information about a server member."
-    )
-    @app_commands.guild_only()
-    @app_commands.describe(member="Member to look up; defaults to you.")
+    @app_commands.command(name="userinfo", description="Show information about a member")
+    @app_commands.describe(member="Member to inspect; leave empty for yourself")
     async def userinfo(
         self,
         interaction: discord.Interaction,
@@ -74,53 +96,42 @@ class BasicTools(commands.Cog):
             value=discord.utils.format_dt(member.created_at, style="D"),
             inline=False,
         )
-        embed.add_field(
-            name="Joined server",
-            value=(
-                discord.utils.format_dt(member.joined_at, style="D")
-                if member.joined_at else "Unknown"
-            ),
-            inline=False,
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
 
+        if isinstance(member, discord.Member):
+            joined = (
+                discord.utils.format_dt(member.joined_at, style="D")
+                if member.joined_at
+                else "Unknown"
+            )
+            embed.add_field(name="Joined server", value=joined, inline=False)
+
+        embed.set_thumbnail(url=member.display_avatar.url)
         await interaction.response.send_message(embed=embed)
 
-    # ---------- AVATAR ----------
-
-    @app_commands.command(
-        name="avatar",
-        description="Show a user's profile picture."
-    )
-    @app_commands.describe(user="User whose avatar you want to see.")
+    @app_commands.command(name="avatar", description="Show a user's avatar")
+    @app_commands.describe(member="User whose avatar you want to see")
     async def avatar(
         self,
         interaction: discord.Interaction,
-        user: discord.User = None,
+        member: discord.User = None,
     ):
-        user = user or interaction.user
+        member = member or interaction.user
 
         embed = discord.Embed(
-            title=f"{user.display_name}'s avatar",
+            title=f"{member}'s avatar",
             color=discord.Color.blurple(),
         )
-        embed.set_image(url=user.display_avatar.url)
-
+        embed.set_image(url=member.display_avatar.url)
         await interaction.response.send_message(embed=embed)
 
-    # ---------- RANDOM CHOICE ----------
-
-    @app_commands.command(
-        name="choose",
-        description="Choose randomly between options separated by commas."
-    )
-    @app_commands.describe(options="Example: pizza, burgers, noodles")
+    @app_commands.command(name="choose", description="Choose between options")
+    @app_commands.describe(options="Separate your choices with |")
     async def choose(self, interaction: discord.Interaction, options: str):
-        choices = [item.strip() for item in options.split(",") if item.strip()]
+        choices = [item.strip() for item in options.split("|") if item.strip()]
 
         if len(choices) < 2:
             await interaction.response.send_message(
-                "Give me at least two options separated by commas.",
+                "Give me at least two choices separated by |.",
                 ephemeral=True,
             )
             return
@@ -129,179 +140,63 @@ class BasicTools(commands.Cog):
             f"I choose: **{random.choice(choices)}**"
         )
 
-    # ---------- MAGIC 8-BALL ----------
-
-    @app_commands.command(
-        name="8ball",
-        description="Ask the magic 8-ball a question."
-    )
-    @app_commands.describe(question="Your question")
-    async def eightball(
-        self,
-        interaction: discord.Interaction,
-        question: str,
-    ):
+    @app_commands.command(name="8ball", description="Ask the magic 8-ball")
+    @app_commands.describe(question="Ask a question")
+    async def eightball(self, interaction: discord.Interaction, question: str):
         answers = [
             "Definitely.",
-            "Absolutely not.",
-            "Probably.",
+            "No doubt about it.",
+            "Looks promising.",
             "Ask again later.",
-            "The odds look good.",
-            "I wouldn't count on it.",
-            "Signs point to yes.",
-            "My sources are unclear.",
-            "Bro, that's a mystery.",
-            "Without a doubt.",
+            "Hard to tell right now.",
+            "Probably not.",
+            "Absolutely not.",
+            "The 8-ball is confused. Try again.",
         ]
-
         await interaction.response.send_message(
-            f"🎱 **Question:** {question}\n"
-            f"**Answer:** {random.choice(answers)}"
+            f"🎱 {random.choice(answers)}"
         )
 
-    # ---------- POLLS ----------
-
-    @app_commands.command(
-        name="poll",
-        description="Create a yes-or-no poll."
-    )
-    @app_commands.guild_only()
-    @app_commands.describe(question="What do you want members to vote on?")
+    @app_commands.command(name="poll", description="Create a yes/no poll")
+    @app_commands.describe(question="What do you want people to vote on?")
     async def poll(self, interaction: discord.Interaction, question: str):
-        embed = discord.Embed(
-            title="📊 Poll",
-            description=question,
-            color=discord.Color.blurple(),
+        await interaction.response.send_message(
+            f"📊 **Poll:** {question}\n\nReact with 👍 for Yes or 👎 for No."
         )
-        embed.set_footer(text=f"Poll by {interaction.user.display_name}")
-
-        await interaction.response.send_message(embed=embed)
 
         message = await interaction.original_response()
-        await message.add_reaction("👍")
-        await message.add_reaction("👎")
-
-    # ---------- TIMEOUT MODERATION ----------
-
-    @app_commands.command(
-        name="timeout",
-        description="Temporarily timeout a server member."
-    )
-    @app_commands.guild_only()
-    @app_commands.describe(
-        member="Member to timeout",
-        minutes="Timeout length in minutes (1 to 10080)",
-        reason="Reason for the timeout",
-    )
-    async def timeout(
-        self,
-        interaction: discord.Interaction,
-        member: discord.Member,
-        minutes: int,
-        reason: str = "No reason provided",
-    ):
-        if not interaction.user.guild_permissions.moderate_members:
-            await interaction.response.send_message(
-                "You need the Moderate Members permission.",
-                ephemeral=True,
-            )
-            return
-
-        if not interaction.guild.me.guild_permissions.moderate_members:
-            await interaction.response.send_message(
-                "I need the Moderate Members permission.",
-                ephemeral=True,
-            )
-            return
-
-        if minutes < 1 or minutes > 10080:
-            await interaction.response.send_message(
-                "Choose a duration from 1 to 10080 minutes (7 days).",
-                ephemeral=True,
-            )
-            return
-
-        if member.id == interaction.user.id:
-            await interaction.response.send_message(
-                "You cannot timeout yourself.",
-                ephemeral=True,
-            )
-            return
-
-        if member.id == self.bot.user.id:
-            await interaction.response.send_message(
-                "I cannot timeout myself.",
-                ephemeral=True,
-            )
-            return
-
-        if member.top_role >= interaction.user.top_role:
-            await interaction.response.send_message(
-                "You cannot timeout someone with an equal or higher role.",
-                ephemeral=True,
-            )
-            return
 
         try:
-            await member.timeout(
-                discord.utils.utcnow()
-                + discord.timedelta(minutes=minutes),
-                reason=reason,
-            )
-        except AttributeError:
-            from datetime import timedelta
-
-            try:
-                await member.timeout(
-                    timedelta(minutes=minutes),
-                    reason=reason,
-                )
-            except discord.HTTPException:
-                await interaction.response.send_message(
-                    "Discord rejected the timeout. Check my role and permissions.",
-                    ephemeral=True,
-                )
-                return
+            await message.add_reaction("👍")
+            await message.add_reaction("👎")
         except discord.HTTPException:
+            pass
+
+    # ---------- Moderation commands ----------
+
+    @app_commands.command(name="clear", description="Delete recent messages")
+    @app_commands.describe(amount="Number of messages to delete, from 1 to 100")
+    async def clear(
+        self,
+        interaction: discord.Interaction,
+        amount: app_commands.Range[int, 1, 100],
+    ):
+        if not await self.moderator_check(interaction, "manage_messages"):
+            return
+
+        channel = interaction.channel
+
+        if not isinstance(channel, discord.TextChannel):
             await interaction.response.send_message(
-                "Discord rejected the timeout. Check my role and permissions.",
+                "Use this command in a text channel.",
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
-            f"Timed out {member.mention} for {minutes} minutes.\n"
-            f"Reason: {reason}"
-        )
-
-    # ---------- CLEAR MESSAGES ----------
-
-    @app_commands.command(
-        name="clear",
-        description="Delete a number of recent messages."
-    )
-    @app_commands.guild_only()
-    @app_commands.describe(amount="Number of messages to delete (1 to 100)")
-    async def clear(self, interaction: discord.Interaction, amount: int):
-        if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message(
-                "You need the Manage Messages permission.",
-                ephemeral=True,
-            )
-            return
-
-        if not interaction.channel.permissions_for(
-            interaction.guild.me
-        ).manage_messages:
+        me = interaction.guild.get_member(self.bot.user.id)
+        if me is None or not channel.permissions_for(me).manage_messages:
             await interaction.response.send_message(
                 "I need the Manage Messages permission.",
-                ephemeral=True,
-            )
-            return
-
-        if amount < 1 or amount > 100:
-            await interaction.response.send_message(
-                "Choose a number from 1 to 100.",
                 ephemeral=True,
             )
             return
@@ -309,211 +204,349 @@ class BasicTools(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            deleted = await interaction.channel.purge(limit=amount)
+            deleted = await channel.purge(limit=amount)
             await interaction.followup.send(
-                f"Deleted {len(deleted)} messages.",
+                f"Deleted {len(deleted)} message(s).",
+                ephemeral=True,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Discord denied permission to delete messages.",
                 ephemeral=True,
             )
         except discord.HTTPException:
             await interaction.followup.send(
-                "I couldn't delete those messages.",
+                "Couldn't delete those messages.",
                 ephemeral=True,
             )
 
-    # ---------- MEMES ----------
-
-    @app_commands.command(
-        name="meme",
-        description="Fetch a random meme."
+    @app_commands.command(name="timeout", description="Timeout a member")
+    @app_commands.describe(
+        member="Member to timeout",
+        minutes="Duration in minutes, from 1 to 10080",
+        reason="Reason for the timeout",
     )
-    async def meme(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+    async def timeout(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        minutes: app_commands.Range[int, 1, 10080],
+        reason: str = "No reason provided",
+    ):
+        if not await self.moderator_check(interaction, "moderate_members"):
+            return
+
+        guild = interaction.guild
+        moderator = interaction.user
+        me = guild.get_member(self.bot.user.id)
+
+        if member.id == moderator.id:
+            await interaction.response.send_message(
+                "You can't timeout yourself.",
+                ephemeral=True,
+            )
+            return
+
+        if member.id == guild.owner_id:
+            await interaction.response.send_message(
+                "You can't timeout the server owner.",
+                ephemeral=True,
+            )
+            return
+
+        if moderator.id != guild.owner_id and member.top_role >= moderator.top_role:
+            await interaction.response.send_message(
+                "Your highest role must be above that member's highest role.",
+                ephemeral=True,
+            )
+            return
+
+        if me is None or not me.guild_permissions.moderate_members:
+            await interaction.response.send_message(
+                "I need the Moderate Members permission.",
+                ephemeral=True,
+            )
+            return
+
+        if member.top_role >= me.top_role:
+            await interaction.response.send_message(
+                "My highest role must be above that member's highest role.",
+                ephemeral=True,
+            )
+            return
 
         try:
-            timeout = aiohttp.ClientTimeout(total=10)
+            await member.timeout(timedelta(minutes=minutes), reason=reason)
+            await interaction.response.send_message(
+                f"Timed out {member.mention} for {minutes} minute(s).\n"
+                f"Reason: {reason}"
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Discord denied permission to timeout that member.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Couldn't apply the timeout.",
+                ephemeral=True,
+            )
 
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(
-                    "https://meme-api.com/gimme"
-                ) as response:
-                    if response.status != 200:
-                        raise ValueError("Meme service unavailable")
+    @app_commands.command(name="untimeout", description="Remove a member's timeout")
+    @app_commands.describe(member="Member whose timeout you want to remove")
+    async def untimeout(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+    ):
+        if not await self.moderator_check(interaction, "moderate_members"):
+            return
 
-                    data = await response.json()
+        guild = interaction.guild
+        moderator = interaction.user
+        me = guild.get_member(self.bot.user.id)
 
-            if data.get("nsfw") or not data.get("url"):
-                await interaction.followup.send(
-                    "Got an unsuitable meme. Try again!"
+        if moderator.id != guild.owner_id and member.top_role >= moderator.top_role:
+            await interaction.response.send_message(
+                "Your highest role must be above that member's highest role.",
+                ephemeral=True,
+            )
+            return
+
+        if me is None or not me.guild_permissions.moderate_members:
+            await interaction.response.send_message(
+                "I need the Moderate Members permission.",
+                ephemeral=True,
+            )
+            return
+
+        if member.top_role >= me.top_role:
+            await interaction.response.send_message(
+                "My highest role must be above that member's highest role.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await member.timeout(None, reason=f"Timeout removed by {moderator}")
+            await interaction.response.send_message(
+                f"Removed the timeout for {member.mention}."
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Discord denied permission to remove that timeout.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Couldn't remove that timeout.",
+                ephemeral=True,
+            )
+
+    @app_commands.command(name="slowmode", description="Set channel slowmode")
+    @app_commands.describe(seconds="Delay in seconds, from 0 to 21600; 0 disables it")
+    async def slowmode(
+        self,
+        interaction: discord.Interaction,
+        seconds: app_commands.Range[int, 0, 21600],
+    ):
+        if not await self.moderator_check(interaction, "manage_channels"):
+            return
+
+        channel = interaction.channel
+
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Use this command in a text channel.",
+                ephemeral=True,
+            )
+            return
+
+        me = interaction.guild.get_member(self.bot.user.id)
+        if me is None or not channel.permissions_for(me).manage_channels:
+            await interaction.response.send_message(
+                "I need the Manage Channels permission.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await channel.edit(slowmode_delay=seconds)
+            if seconds == 0:
+                await interaction.response.send_message("Slowmode disabled.")
+            else:
+                await interaction.response.send_message(
+                    f"Slowmode set to {seconds} second(s)."
                 )
-                return
-
-            embed = discord.Embed(
-                title=data.get("title", "Random meme")[:250],
-                url=data.get("postLink"),
-                color=discord.Color.blurple(),
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Discord denied permission to change slowmode.",
+                ephemeral=True,
             )
-            embed.set_image(url=data["url"])
-            embed.set_footer(
-                text=f"From r/{data.get('subreddit', 'memes')}"
-            )
-
-            await interaction.followup.send(embed=embed)
-
-        except (aiohttp.ClientError, ValueError, KeyError, TypeError):
-            await interaction.followup.send(
-                "Couldn't fetch a meme right now. Try again later."
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Couldn't change slowmode.",
+                ephemeral=True,
             )
 
-    # ---------- JOKES ----------
-
-    @app_commands.command(
-        name="joke",
-        description="Get a random joke."
-    )
-    async def joke(self, interaction: discord.Interaction):
-        jokes = [
-            "Why do programmers prefer dark mode? Because light attracts bugs.",
-            "I told my computer I needed a break. It said: no problem, I'll go to sleep.",
-            "Why did the Discord bot cross the road? It got pinged on the other side.",
-            "My Wi-Fi and I have a complicated relationship. It keeps disconnecting.",
-            "I tried to make a belt out of watches. It was a waist of time.",
-        ]
-
-        await interaction.response.send_message(random.choice(jokes))
-
-    # ---------- ROAST ----------
-
-    @app_commands.command(
-        name="roast",
-        description="Give someone a playful roast."
-    )
-    @app_commands.describe(user="Who should get roasted?")
-    async def roast(
-        self,
-        interaction: discord.Interaction,
-        user: discord.User = None,
-    ):
-        user = user or interaction.user
-
-        roasts = [
-            "has the processing speed of a potato.",
-            "could lose a staring contest with a loading screen.",
-            "has more lag than public Wi-Fi.",
-            "is the reason instructions have pictures.",
-            "has main-character energy in a tutorial.",
-            "could confuse a GPS by walking in a straight line.",
-        ]
-
-        await interaction.response.send_message(
-            f"{user.mention} {random.choice(roasts)}"
-        )
-
-    # ---------- SHIP RATING ----------
-
-    @app_commands.command(
-        name="ship",
-        description="Generate a random compatibility score."
-    )
-    @app_commands.describe(
-        first="First person",
-        second="Second person",
-    )
-    async def ship(
-        self,
-        interaction: discord.Interaction,
-        first: discord.User,
-        second: discord.User,
-    ):
-        score = random.randint(0, 100)
-
-        if score >= 80:
-            comment = "Perfect match!"
-        elif score >= 60:
-            comment = "Looking promising."
-        elif score >= 40:
-            comment = "Could go either way."
-        else:
-            comment = "It's complicated."
-
-        await interaction.response.send_message(
-            f"💘 **{first.display_name} + {second.display_name}**\n"
-            f"Compatibility: **{score}%** — {comment}\n"
-            "*Just for fun; not a real compatibility test.*"
-        )
-
-    # ---------- RATE SOMETHING ----------
-
-    @app_commands.command(
-        name="rate",
-        description="Give something a random rating out of 10."
-    )
-    @app_commands.describe(item="What should I rate?")
-    async def rate(self, interaction: discord.Interaction, item: str):
-        score = random.randint(1, 10)
-
-        await interaction.response.send_message(
-            f"I rate **{item}** a **{score}/10**."
-        )
-
-    # ---------- WELCOME MESSAGE ----------
+    # ---------- Welcome message ----------
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        """Welcome new members in #general."""
         channel = discord.utils.get(
             member.guild.text_channels,
             name="general",
         )
 
-        if channel is not None:
-            try:
-                await channel.send(
-                    f"Welcome {member.mention} Enjoy your stay!"
-                )
-            except discord.HTTPException:
-                pass
+        if channel is None:
+            return
 
-    # ---------- BASIC ANTI-SPAM ----------
+        me = member.guild.get_member(self.bot.user.id)
+        if me is None or not channel.permissions_for(me).send_messages:
+            return
+
+        try:
+            await channel.send(
+                f"Welcome {member.mention} Enjoy your stay!",
+                allowed_mentions=discord.AllowedMentions(
+                    users=True,
+                    roles=False,
+                    everyone=False,
+                ),
+            )
+        except discord.HTTPException:
+            pass
+
+    # ---------- Anti-spam and funny replies ----------
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """Delete rapid message bursts when possible."""
         if message.author.bot or message.guild is None:
             return
 
-        if not message.guild.me.guild_permissions.manage_messages:
+        if not isinstance(message.channel, discord.TextChannel):
             return
 
         now = time.monotonic()
-        user_key = (message.guild.id, message.author.id)
-        timestamps = self.message_times[user_key]
-
-        timestamps.append(now)
+        key = (message.guild.id, message.author.id)
+        timestamps = self.message_times[key]
 
         while timestamps and now - timestamps[0] > 6:
             timestamps.popleft()
 
+        timestamps.append(now)
+
+        # Delete a rapid burst of messages when possible.
         if len(timestamps) >= 6:
-            timestamps.clear()
+            me = message.guild.get_member(self.bot.user.id)
 
-            try:
-                await message.delete()
-            except discord.HTTPException:
-                return
-
-            last_warning = self.last_spam_warning.get(user_key, 0)
-
-            if now - last_warning >= 10:
-                self.last_spam_warning[user_key] = now
-
+            if me and message.channel.permissions_for(me).manage_messages:
                 try:
-                    await message.channel.send(
-                        f"{message.author.mention}, slow down! "
-                        "Please don't spam.",
-                        delete_after=5,
-                    )
+                    await message.delete()
+                    timestamps.clear()
                 except discord.HTTPException:
                     pass
+
+            return
+
+        # The original jokes you chose — unchanged.
+        replies = {
+            "hello": [
+                "HELLOOO. Please remain calm. I am only 73% operational.",
+                "Oh look, a living human. What's up? 💀",
+                "Greetings, earthling. Your Wi-Fi password, please. Kidding.",
+            ],
+            "hi": [
+                "Hiiii. I was doing absolutely nothing.",
+                "Yo. The council has been expecting you.",
+                "Hi bro. I bring absolutely no wisdom.",
+            ],
+            "bro": [
+                "BRO 💀",
+                "Why am I being summoned like a side quest?",
+                "Bro said bro. Cinema.",
+            ],
+            "lol": [
+                "Glad my suffering entertains you.",
+                "LMAOOO. I need financial compensation for this.",
+                "💀💀 someone save this conversation.",
+            ],
+            "lmao": [
+                "YOUR HONOR, THEY'RE LAUGHING AT ME.",
+                "I'm putting this in my villain origin story.",
+                "NAHHH 😭",
+            ],
+            "help": [
+                "Help with what, bro? My life is already a side quest.",
+                "Support ticket received. Emotional support unavailable.",
+                "I'm listening. My two brain cells are ready.",
+            ],
+            "bored": [
+                "Have you tried staring at a wall? Very advanced gameplay.",
+                "Go bother someone. Preferably someone who deserves it.",
+                "Boredom detected. Deploying absolutely nothing.",
+            ],
+            "good morning": [
+                "MORNING. Time to pretend we're productive.",
+                "Good morning. Who approved this early access to life?",
+                "Rise and shine. Or just rise. Shining is optional.",
+            ],
+            "good night": [
+                "Night bro. Don't let the lag monsters bite.",
+                "Sleep well. I'll be here judging everyone's messages.",
+                "Logging off? Weak. Go recharge your human battery.",
+            ],
+            "thanks": [
+                "You're welcome, citizen.",
+                "No problem. Payment accepted in imaginary cookies.",
+                "Anytime, bro. My invoice is in the mail.",
+            ],
+            "thank you": [
+                "You're welcome. I expect a statue in my honor.",
+                "No worries. I live to serve. Unfortunately.",
+                "Glad I could help, bro.",
+            ],
+            "who are you": [
+                "I'm LawlietBot. Professional yapper, amateur genius.",
+                "Your local digital menace.",
+                "A bunch of code with suspicious confidence.",
+            ],
+            "are you stupid": [
+                "I prefer the term computationally adventurous.",
+                "And yet you asked me. Interesting strategy. 💀",
+                "My lawyer advised me not to answer that.",
+            ],
+        }
+
+        content = message.content.lower().strip()
+
+        for phrase, options in replies.items():
+            if not re.search(
+                r"(?<!\w)" + re.escape(phrase) + r"(?!\w)",
+                content,
+            ):
+                continue
+
+            # Avoid replying to every matching message.
+            channel_key = (message.guild.id, message.channel.id)
+
+            if now - self.last_auto_reply[channel_key] < 8:
+                return
+
+            if random.random() > 0.65:
+                return
+
+            self.last_auto_reply[channel_key] = now
+
+            try:
+                await message.channel.send(
+                    random.choice(options),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                pass
+
+            return
 
 
 async def setup(bot):
