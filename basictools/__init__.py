@@ -1,4 +1,3 @@
-
 import discord
 from redbot.core import commands
 
@@ -16,14 +15,15 @@ class BasicTools(commands.Cog):
 
         embed = discord.Embed(
             title=guild.name,
-            color=discord.Color.blurple()
+            color=discord.Color.blurple(),
         )
         embed.add_field(name="Members", value=guild.member_count)
         embed.add_field(
             name="Text channels",
-            value=len(guild.text_channels)
+            value=len(guild.text_channels),
         )
         await ctx.send(embed=embed)
+
 
     @commands.command()
     async def userinfo(self, ctx, member: discord.Member = None):
@@ -32,17 +32,17 @@ class BasicTools(commands.Cog):
 
         embed = discord.Embed(
             title=str(member),
-            color=discord.Color.blurple()
+            color=discord.Color.blurple(),
         )
         embed.add_field(name="User ID", value=member.id, inline=False)
         embed.add_field(
             name="Account created",
             value=discord.utils.format_dt(member.created_at, style="D"),
-            inline=False
+            inline=False,
         )
         await ctx.send(embed=embed)
 
 
 async def setup(bot):
-    await bot.add_cog(BasicTools(bot))
-      
+    await bot.add_cog(BasicTools())
+    
