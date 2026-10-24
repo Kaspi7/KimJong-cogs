@@ -1,1 +1,1 @@
-# lawlietbot-cogs
+# Kim Jong-cogs
