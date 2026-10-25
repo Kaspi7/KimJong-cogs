@@ -530,7 +530,35 @@ class BasicTools(commands.Cog):
         ):
             return
         content = message.content.lower().strip()
+     
+        # Automatic chaotic keyword reactions (70% chance)
+        keyword_reactions = {
+            "lol": ["😂", "💀"],
+            "lmao": ["💀", "😂"],
+            "bro": ["💀", "😭"],
+            "bruh": ["💀", "🤨"],
+            "sus": ["🤨", "👀"],
+            "skill issue": ["💀", "😭"],
+            "rip": ["🪦", "💀"],
+            "noob": ["🤡", "💀"],
+            "gg": ["🫡", "🔥"],
+        }
 
+        matched_emojis = []
+
+        for keyword, emojis in keyword_reactions.items():
+            if re.search(
+                r"(?<!\w)" + re.escape(keyword) + r"(?!\w)",
+                content,
+            ):
+                matched_emojis.extend(emojis)
+
+        if matched_emojis and random.random() < 0.70:
+            try:
+                await message.add_reaction(random.choice(matched_emojis))
+            except discord.HTTPException:
+                pass
+                    
         for phrase, options in replies.items():
             if not re.search(
                 r"(?<!\w)" + re.escape(phrase) + r"(?!\w)",
