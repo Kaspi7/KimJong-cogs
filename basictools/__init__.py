@@ -517,7 +517,18 @@ class BasicTools(commands.Cog):
                 "My lawyer advised me not to answer that.",
             ],
         }
-
+        if self.bot.user and (
+            self.bot.user in message.mentions
+            or (
+                message.reference
+                and getattr(message.reference, "message_id", None)
+                and (
+                    getattr(message.reference.resolved, "author", None)
+                    and message.reference.resolved.author.id == self.bot.user.id
+                )
+            )
+        ):
+            return
         content = message.content.lower().strip()
 
         for phrase, options in replies.items():
