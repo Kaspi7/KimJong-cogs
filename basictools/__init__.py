@@ -508,9 +508,8 @@ class BasicTools(commands.Cog):
                 "Glad I could help, bro.",
             ],
             "who are you": [
-                "I'm LawlietBot. Professional yapper, amateur genius.",
+                "I'm Kim Jong Bot. Professional yapper, amateur genius.",
                 "Your local digital menace.",
-                "A bunch of code with suspicious confidence.",
             ],
             "are you stupid": [
                 "I prefer the term computationally adventurous.",
@@ -549,7 +548,158 @@ class BasicTools(commands.Cog):
 
             return
 
+class KimJongAI(commands.Cog):
+    """AI chat using OpenRouter."""
+
+    def __init__(self, bot):
+        self.bot = bot
+        self.history = {}
+        self.cooldowns = {}
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or message.guild is None:
+            return
+
+        if self.bot.user is None:
+            return
+
+        mentioned = self.bot.user in message.mentions
+        replied = False
+
+        ref = message.reference
+        if ref and ref.message_id:
+            original = ref.resolved
+
+            if original is None:
+                try:
+                    original = await message.channel.fetch_message(
+                        ref.message_id
+                    )
+                except discord.HTTPException:
+                    original = None
+
+            if original and original.author.id == self.bot.user.id:
+                replied = True
+
+        if not (mentioned or replied):
+            return
+
+        ctx = await self.bot.get_context(message)
+        if ctx.valid:
+            return
+
+        prompt = re.sub(
+            rf"<@!?{self.bot.user.id}>",
+            "",
+            message.content,
+        ).strip()
+
+        if not prompt:
+            prompt = "Say something funny."
+
+        prompt = prompt[:1000]
+
+        now = time.monotonic()
+        user_id = message.author.id
+
+        if now - self.cooldowns.get(user_id, 0) < 5:
+            return
+
+        self.cooldowns[user_id] = now
+
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            await message.reply(
+                "My AI isn't configured. Ask my owner to check the API key.",
+                mention_author=False,
+            )
+            return
+
+        history_key = (message.channel.id, user_id)
+        history = self.history.get(history_key, [])
+
+        payload = {
+            "models": [
+                "google/gemma-4-31b-it:free",
+                "nvidia/nemotron-3-super:free",
+                "google/gemma-4-26b-a4b-it:free",
+            ],
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are KimJong bot, a funny, sarcastic, "
+                        "slightly chaotic Discord bot. Be witty and "
+                        "natural. Keep replies concise. Do not genuinely "
+                        "harass users or claim real-world experiences."
+                    ),
+                },
+                *history[-8:],
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 300,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=45)
+
+            async with message.channel.typing():
+                async with aiohttp.ClientSession(
+                    timeout=timeout
+                ) as session:
+                    async with session.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    ) as response:
+                        if response.status != 200:
+                            print(
+                                "OpenRouter error:",
+                                response.status,
+                                (await response.text())[:300],
+                            )
+                            await message.reply(
+                                "My AI is busy or unavailable. Try again later.",
+                                mention_author=False,
+                            )
+                            return
+
+                        data = await response.json()
+
+            answer = data["choices"][0]["message"]["content"]
+            if not answer or not answer.strip():
+                await message.reply(
+                    "My brain returned nothing. Try again.",
+                    mention_author=False,
+                )
+                return
+
+            answer = answer.strip()[:1900]
+
+            self.history[history_key] = (
+                history
+                + [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": answer},
+                ]
+            )[-10:]
+
+            await message.reply(answer, mention_author=False)
+
+        except Exception as error:
+            print("KimJong AI error:", repr(error))
+            await message.reply(
+                "I can't reach my AI right now. Try again later.",
+                mention_author=False,
+            )
+            
 
 async def setup(bot):
     await bot.add_cog(BasicTools(bot))
-        
+    await bot.add_cog(KimJongAI(bot))
