@@ -631,16 +631,12 @@ class KimJongAI(commands.Cog):
         history = self.history.get(history_key, [])
 
         payload = {
-            "models": [
-                "google/gemma-4-31b-it:free",
-                "nvidia/nemotron-3-super:free",
-                "google/gemma-4-26b-a4b-it:free",
-            ],
+            "model": "openrouter/free",
             "messages": [
                 {
                     "role": "system",
                     "content": (
-                        "You are KimJong bot, a funny, sarcastic, "
+                        "You are Kim Jong Bot, a funny, sarcastic, "
                         "slightly chaotic Discord bot. Be witty and "
                         "natural. Keep replies concise. Do not genuinely "
                         "harass users or claim real-world experiences."
@@ -651,7 +647,7 @@ class KimJongAI(commands.Cog):
             ],
             "max_tokens": 300,
         }
-
+        
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
